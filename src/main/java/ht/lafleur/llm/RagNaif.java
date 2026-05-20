@@ -1,0 +1,140 @@
+package ht.lafleur.llm;
+
+import dev.langchain4j.data.document.Document;
+import dev.langchain4j.data.document.DocumentParser;
+import dev.langchain4j.data.document.DocumentSplitter;
+import dev.langchain4j.data.document.loader.ClassPathDocumentLoader;
+import dev.langchain4j.data.document.parser.apache.tika.ApacheTikaDocumentParser;
+import dev.langchain4j.data.document.splitter.DocumentSplitters;
+import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.memory.ChatMemory;
+import dev.langchain4j.memory.chat.MessageWindowChatMemory;
+import dev.langchain4j.model.anthropic.AnthropicChatModel;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.embedding.EmbeddingModel;
+import dev.langchain4j.model.embedding.onnx.allminilml6v2.AllMiniLmL6V2EmbeddingModel;
+import dev.langchain4j.model.googleai.GoogleAiGeminiChatModel;
+import dev.langchain4j.rag.content.retriever.ContentRetriever;
+import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
+import dev.langchain4j.service.AiServices;
+import dev.langchain4j.store.embedding.EmbeddingStore;
+import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
+
+import java.util.List;
+import java.util.Scanner;
+import java.util.logging.ConsoleHandler;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public class RagNaif {
+    public static void main(String[] args) {
+
+        configureLogger();
+
+        String geminiKey = System.getenv("GEMINI_KEY");
+        String claudeKey= System.getenv("CLAUDE_KEY");
+
+        if ((geminiKey == null || geminiKey.isBlank()) && (claudeKey == null || claudeKey.isBlank())) {
+            System.err.println("Environment variable GEMINI_KEY and CLAUDE_KEY is not set. Set it and retry.");
+            System.exit(1);
+        }
+
+        String documentPath = "rag.pdf";
+
+        ChatModel modelGemini = GoogleAiGeminiChatModel.builder()
+                .apiKey(geminiKey)
+                .modelName("gemini-3-flash")
+                .temperature(0.3)
+                .logRequests(true)
+                .logResponses(true)
+                .build();
+
+        ChatModel modelClaude = AnthropicChatModel.builder()
+                .apiKey(claudeKey)
+                .modelName("claude-sonnet-4-6")
+                .temperature(0.3)
+                .logRequests(true)
+                .logResponses(true)
+                .build();
+
+
+        // Création d'un Document à partir du fichier PDF avec  un parseur de fichier PDF fourni par LangChain4j
+        DocumentParser parser = new ApacheTikaDocumentParser();
+        Document document = ClassPathDocumentLoader.loadDocument(documentPath, parser);
+
+        // Découpage du document en morceaux
+        DocumentSplitter documentSplitter = DocumentSplitters.recursive(512,30);
+        List<TextSegment> segments = documentSplitter.split(document);
+
+        // Création d'un modèle d'embedding
+        EmbeddingModel embeddingModel = new AllMiniLmL6V2EmbeddingModel();
+
+        // Création des embeddings pour les segments
+        var embeddings = embeddingModel.embedAll(segments).content();
+
+
+        /*/ Utilisation d'une base vectorielle Qdrant pour stocker les embeddings et les segments associés.
+        EmbeddingStore<TextSegment> embeddingStore = QdrantEmbeddingStore.builder()
+                .host("localhost")
+                .port(6334)
+                .collectionName("my-collection")
+                .build();
+         //*/
+
+        //*/ Utilisation d'une base vectorielle en mémoire pour stocker les embeddings et les segments associés.
+        EmbeddingStore<TextSegment> embeddingStore = new InMemoryEmbeddingStore<>();
+        //*
+
+        embeddingStore.addAll(embeddings, segments);
+
+        // Création du ContentRetriever. Nous ne voulons que les 2 résultats
+        // les plus pertinents et seulement si leur score est supérieur ou égal à 0,5
+        ContentRetriever contentRetriever = EmbeddingStoreContentRetriever.builder()
+                .embeddingStore(embeddingStore)
+                .embeddingModel(embeddingModel)
+                .maxResults(5)
+                .minScore(0.5)
+                .build();
+
+        // Créez une mémoire pour 10 messages.
+        ChatMemory chatMemory = MessageWindowChatMemory.withMaxMessages(10);
+
+        // Création de l'assistant. Utilise le modèle Gemini ou le modèle Claude.
+        Assistant assistant = AiServices.builder(Assistant.class)
+                                //.chatModel(modelGemini)
+                                .chatModel(modelClaude)
+                                .chatMemory(chatMemory)
+                                .contentRetriever(contentRetriever)
+                                .build();
+
+        // Boucle de dialogue avec l'assistant. L'utilisateur pose une question,
+        // l'assistant répond en utilisant les informations du document.
+        try (Scanner scanner = new Scanner(System.in)) {
+            while (true) {
+                System.out.println("==================================================");
+                System.out.println("Posez votre question : ");
+                String question = scanner.nextLine();
+                if (question.isBlank()) {
+                    continue;
+                }
+                System.out.println("==================================================");
+                if ("fin".equalsIgnoreCase(question)) {
+                    break;
+                }
+                String reponse = assistant.chat(question);
+                System.out.println("Assistant : " + reponse);
+                System.out.println("==================================================");
+            }
+        }
+    }
+
+    private static void configureLogger() {
+        // Configure le logger sous-jacent (java.util.logging)
+        Logger packageLogger = Logger.getLogger("dev.langchain4j");
+        packageLogger.setLevel(Level.FINE); // Ajuster niveau
+        // Ajouter un handler pour la console pour faire afficher les logs
+        ConsoleHandler handler = new ConsoleHandler();
+        handler.setLevel(Level.FINE);
+        packageLogger.addHandler(handler);
+    }
+}
