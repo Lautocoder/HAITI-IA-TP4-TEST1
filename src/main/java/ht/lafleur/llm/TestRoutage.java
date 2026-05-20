@@ -31,18 +31,19 @@ import java.util.logging.ConsoleHandler;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import static ht.lafleur.llm.Utils.*;
+
 public class TestRoutage {
 
-    static EmbeddingModel embeddingModel = new AllMiniLmL6V2EmbeddingModel();
 
     public static void main(String[] args) {
-        configureLogger();
+        Utils.configureLogger();
 
         String pathIADoc = "rag.pdf";
         String pathOtherDoc = "HadoopSparkMapReduce_2.pdf";
 
-        String geminiKey = System.getenv("GEMINI_KEY");
-        String claudeKey= System.getenv("CLAUDE_KEY");
+        String geminiKey = getKey("GEMINI_KEY");
+        String claudeKey= getKey("CLAUDE_KEY");
 
         if ((geminiKey == null || geminiKey.isBlank()) && (claudeKey == null || claudeKey.isBlank())) {
             System.err.println("Environment variable GEMINI_KEY and CLAUDE_KEY is not set. Set it and retry.");
@@ -118,36 +119,5 @@ public class TestRoutage {
 
     }
 
-    // Charge un PDF et retourne un EmbeddingStore peuplé
-    private static EmbeddingStore<TextSegment> creerEmbeddingStore(String cheminPdf) {
-        DocumentParser parser = new ApacheTikaDocumentParser();
-        Document document = ClassPathDocumentLoader.loadDocument(cheminPdf, parser);
 
-        DocumentSplitter splitter = DocumentSplitters.recursive(512, 30);
-        var segments = splitter.split(document);
-
-        var embeddings = embeddingModel.embedAll(segments).content();
-
-        EmbeddingStore<TextSegment> store = new InMemoryEmbeddingStore<>();
-        store.addAll(embeddings, segments);
-        return store;
-    }
-
-    // Crée un ContentRetriever à partir d'un EmbeddingStore
-    private static ContentRetriever creerContentRetriever(EmbeddingStore<TextSegment> store) {
-        return EmbeddingStoreContentRetriever.builder()
-                .embeddingStore(store)
-                .embeddingModel(embeddingModel)
-                .maxResults(5)
-                .minScore(0.5)
-                .build();
-    }
-
-    private static void configureLogger() {
-        Logger packageLogger = Logger.getLogger("dev.langchain4j");
-        packageLogger.setLevel(Level.FINE);
-        ConsoleHandler handler = new ConsoleHandler();
-        handler.setLevel(Level.FINE);
-        packageLogger.addHandler(handler);
-    }
 }

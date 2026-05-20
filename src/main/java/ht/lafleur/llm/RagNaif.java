@@ -32,7 +32,7 @@ import java.util.logging.Logger;
 public class RagNaif {
     public static void main(String[] args) {
 
-        configureLogger();
+        Utils.configureLogger();
 
         String geminiKey = System.getenv("GEMINI_KEY");
         String claudeKey= System.getenv("CLAUDE_KEY");
@@ -137,13 +137,4 @@ public class RagNaif {
         }
     }
 
-    private static void configureLogger() {
-        // Configure le logger sous-jacent (java.util.logging)
-        Logger packageLogger = Logger.getLogger("dev.langchain4j");
-        packageLogger.setLevel(Level.FINE); // Ajuster niveau
-        // Ajouter un handler pour la console pour faire afficher les logs
-        ConsoleHandler handler = new ConsoleHandler();
-        handler.setLevel(Level.FINE);
-        packageLogger.addHandler(handler);
-    }
 }
