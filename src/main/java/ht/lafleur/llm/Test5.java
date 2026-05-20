@@ -18,35 +18,40 @@ import dev.langchain4j.rag.DefaultRetrievalAugmentor;
 import dev.langchain4j.rag.RetrievalAugmentor;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
+import dev.langchain4j.rag.content.retriever.WebSearchContentRetriever;
+import dev.langchain4j.rag.query.router.DefaultQueryRouter;
+import dev.langchain4j.rag.query.router.QueryRouter;
 import dev.langchain4j.rag.query.transformer.CompressingQueryTransformer;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
+import dev.langchain4j.web.search.WebSearchEngine;
+import dev.langchain4j.web.search.tavily.TavilyWebSearchEngine;
 
 import java.util.List;
 import java.util.Scanner;
-public class RagNaif {
+
+import static ht.lafleur.llm.Utils.getKey;
+
+public class Test5 {
+
     public static void main(String[] args) {
 
         Utils.configureLogger();
 
-        String geminiKey = System.getenv("GEMINI_KEY");
-        String claudeKey= System.getenv("CLAUDE_KEY");
-
-        if ((geminiKey == null || geminiKey.isBlank()) && (claudeKey == null || claudeKey.isBlank())) {
-            System.err.println("Environment variable GEMINI_KEY and CLAUDE_KEY is not set. Set it and retry.");
-            System.exit(1);
-        }
+//        String geminiKey = getKey("GEMINI_KEY");
+        String claudeKey= getKey("CLAUDE_KEY");
+        String tavilyKey= getKey("TAVILY_KEY");
 
         String documentPath = "rag.pdf";
 
-        ChatModel modelGemini = GoogleAiGeminiChatModel.builder()
-                .apiKey(geminiKey)
-                .modelName("gemini-3-flash")
-                .temperature(0.3)
-                .logRequests(true)
-                .logResponses(true)
-                .build();
+//        ChatModel modelGemini = GoogleAiGeminiChatModel.builder()
+//                .apiKey(geminiKey)
+//                .modelName("gemini-3-flash")
+//                .temperature(0.3)
+//                .logRequests(true)
+//                .logResponses(true)
+//                .build();
 
         ChatModel modelClaude = AnthropicChatModel.builder()
                 .apiKey(claudeKey)
@@ -95,22 +100,33 @@ public class RagNaif {
                 .minScore(0.5)
                 .build();
 
-        CompressingQueryTransformer queryTransformer = new CompressingQueryTransformer(modelClaude);
-
-        RetrievalAugmentor retrievalAugmentor = DefaultRetrievalAugmentor.builder()
-                .queryTransformer(queryTransformer)
-                .contentRetriever(contentRetriever)
+        // Création du WebSearchEngine Tavily
+        WebSearchEngine webSearchEngine = TavilyWebSearchEngine.builder()
+                .apiKey(tavilyKey)
                 .build();
-        // Créez une mémoire pour 10 messages.
+
+        // Création du ContentRetriever Web
+        ContentRetriever webRetriever = WebSearchContentRetriever.builder()
+                .webSearchEngine(webSearchEngine)
+                .build();
+
+        QueryRouter queryRouter = new DefaultQueryRouter(contentRetriever, webRetriever);
+
+        // RetrievalAugmentor avec le QueryRouter
+        RetrievalAugmentor retrievalAugmentor = DefaultRetrievalAugmentor.builder()
+                .queryRouter(queryRouter)
+                .build();
+
+        // Mémoire de 10 messages
         ChatMemory chatMemory = MessageWindowChatMemory.withMaxMessages(10);
 
         // Création de l'assistant. Utilise le modèle Gemini ou le modèle Claude.
         Assistant assistant = AiServices.builder(Assistant.class)
-                                //.chatModel(modelGemini)
-                                .chatModel(modelClaude)
-                                .chatMemory(chatMemory)
-                                .retrievalAugmentor(retrievalAugmentor)
-                                .build();
+                //.chatModel(modelGemini)
+                .chatModel(modelClaude)
+                .chatMemory(chatMemory)
+                .retrievalAugmentor(retrievalAugmentor)
+                .build();
 
         // Boucle de dialogue avec l'assistant. L'utilisateur pose une question,
         // l'assistant répond en utilisant les informations du document.
@@ -132,5 +148,4 @@ public class RagNaif {
             }
         }
     }
-
 }
