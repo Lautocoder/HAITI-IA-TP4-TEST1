@@ -18,21 +18,28 @@ import dev.langchain4j.rag.DefaultRetrievalAugmentor;
 import dev.langchain4j.rag.RetrievalAugmentor;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
-import dev.langchain4j.rag.query.transformer.CompressingQueryTransformer;
+import dev.langchain4j.rag.query.router.LanguageModelQueryRouter;
+import dev.langchain4j.rag.query.router.QueryRouter;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
 
-import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Scanner;
 import java.util.logging.ConsoleHandler;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-public class RagNaif {
-    public static void main(String[] args) {
+public class TestRoutage {
 
+    static EmbeddingModel embeddingModel = new AllMiniLmL6V2EmbeddingModel();
+
+    public static void main(String[] args) {
         configureLogger();
+
+        String pathIADoc = "rag.pdf";
+        String pathOtherDoc = "HadoopSparkMapReduce_2.pdf";
 
         String geminiKey = System.getenv("GEMINI_KEY");
         String claudeKey= System.getenv("CLAUDE_KEY");
@@ -41,9 +48,7 @@ public class RagNaif {
             System.err.println("Environment variable GEMINI_KEY and CLAUDE_KEY is not set. Set it and retry.");
             System.exit(1);
         }
-
-        String documentPath = "rag.pdf";
-
+        // Création des modèles de langage
         ChatModel modelGemini = GoogleAiGeminiChatModel.builder()
                 .apiKey(geminiKey)
                 .modelName("gemini-3-flash")
@@ -60,64 +65,39 @@ public class RagNaif {
                 .logResponses(true)
                 .build();
 
-
-        // Création d'un Document à partir du fichier PDF avec  un parseur de fichier PDF fourni par LangChain4j
-        DocumentParser parser = new ApacheTikaDocumentParser();
-        Document document = ClassPathDocumentLoader.loadDocument(documentPath, parser);
-
-        // Découpage du document en morceaux
-        DocumentSplitter documentSplitter = DocumentSplitters.recursive(512,30);
-        List<TextSegment> segments = documentSplitter.split(document);
-
-        // Création d'un modèle d'embedding
-        EmbeddingModel embeddingModel = new AllMiniLmL6V2EmbeddingModel();
-
-        // Création des embeddings pour les segments
-        var embeddings = embeddingModel.embedAll(segments).content();
-
-
-        /*/ Utilisation d'une base vectorielle Qdrant pour stocker les embeddings et les segments associés.
-        EmbeddingStore<TextSegment> embeddingStore = QdrantEmbeddingStore.builder()
-                .host("localhost")
-                .port(6334)
-                .collectionName("my-collection")
-                .build();
-         //*/
-
-        //*/ Utilisation d'une base vectorielle en mémoire pour stocker les embeddings et les segments associés.
-        EmbeddingStore<TextSegment> embeddingStore = new InMemoryEmbeddingStore<>();
-        //*
-
-        embeddingStore.addAll(embeddings, segments);
-
-        // Création du ContentRetriever. Nous ne voulons que les 2 résultats
-        // les plus pertinents et seulement si leur score est supérieur ou égal à 0,5
-        ContentRetriever contentRetriever = EmbeddingStoreContentRetriever.builder()
-                .embeddingStore(embeddingStore)
-                .embeddingModel(embeddingModel)
-                .maxResults(5)
-                .minScore(0.5)
-                .build();
-
-        CompressingQueryTransformer queryTransformer = new CompressingQueryTransformer(modelClaude);
-
-        RetrievalAugmentor retrievalAugmentor = DefaultRetrievalAugmentor.builder()
-                .queryTransformer(queryTransformer)
-                .contentRetriever(contentRetriever)
-                .build();
         // Créez une mémoire pour 10 messages.
         ChatMemory chatMemory = MessageWindowChatMemory.withMaxMessages(10);
 
-        // Création de l'assistant. Utilise le modèle Gemini ou le modèle Claude.
-        Assistant assistant = AiServices.builder(Assistant.class)
-                                //.chatModel(modelGemini)
-                                .chatModel(modelClaude)
-                                .chatMemory(chatMemory)
-                                .retrievalAugmentor(retrievalAugmentor)
-                                .build();
+        // Phase 1 — Ingestion des 2 documents
+        EmbeddingStore<TextSegment> storeIADoc = creerEmbeddingStore(pathIADoc);
+        EmbeddingStore<TextSegment> storeOtherDoc = creerEmbeddingStore(pathOtherDoc);
 
-        // Boucle de dialogue avec l'assistant. L'utilisateur pose une question,
-        // l'assistant répond en utilisant les informations du document.
+        // Phase 2 — ContentRetrievers
+        ContentRetriever retrieverIADoc = creerContentRetriever(storeIADoc);
+        ContentRetriever retrieverOtherDoc = creerContentRetriever(storeOtherDoc);
+
+
+        Map<ContentRetriever, String> retrieverDescriptions = new HashMap<>();
+        retrieverDescriptions.put(retrieverIADoc,
+                "Document sur l'intelligence artificielle, le machine learning, le RAG, le fine-tuning et les LLMs.");
+        retrieverDescriptions.put(retrieverOtherDoc,
+                "Document sur Hadoop, Spark, MapReduce et les systèmes de fichiers distribués.");
+
+        //  Routage
+        QueryRouter routage = new LanguageModelQueryRouter(modelClaude, retrieverDescriptions);
+
+        RetrievalAugmentor retrievalAugmentor = DefaultRetrievalAugmentor.builder()
+                .queryRouter(routage)
+                .build();
+
+        // Phase 4 — Test
+        Assistant assistant = AiServices.builder(Assistant.class)
+                            .chatModel(modelClaude)
+                            .retrievalAugmentor(retrievalAugmentor)
+                            .chatMemory(chatMemory)
+                            .build();
+
+
         try (Scanner scanner = new Scanner(System.in)) {
             while (true) {
                 System.out.println("==================================================");
@@ -135,13 +115,37 @@ public class RagNaif {
                 System.out.println("==================================================");
             }
         }
+
+    }
+
+    // Charge un PDF et retourne un EmbeddingStore peuplé
+    private static EmbeddingStore<TextSegment> creerEmbeddingStore(String cheminPdf) {
+        DocumentParser parser = new ApacheTikaDocumentParser();
+        Document document = ClassPathDocumentLoader.loadDocument(cheminPdf, parser);
+
+        DocumentSplitter splitter = DocumentSplitters.recursive(512, 30);
+        var segments = splitter.split(document);
+
+        var embeddings = embeddingModel.embedAll(segments).content();
+
+        EmbeddingStore<TextSegment> store = new InMemoryEmbeddingStore<>();
+        store.addAll(embeddings, segments);
+        return store;
+    }
+
+    // Crée un ContentRetriever à partir d'un EmbeddingStore
+    private static ContentRetriever creerContentRetriever(EmbeddingStore<TextSegment> store) {
+        return EmbeddingStoreContentRetriever.builder()
+                .embeddingStore(store)
+                .embeddingModel(embeddingModel)
+                .maxResults(5)
+                .minScore(0.5)
+                .build();
     }
 
     private static void configureLogger() {
-        // Configure le logger sous-jacent (java.util.logging)
         Logger packageLogger = Logger.getLogger("dev.langchain4j");
-        packageLogger.setLevel(Level.FINE); // Ajuster niveau
-        // Ajouter un handler pour la console pour faire afficher les logs
+        packageLogger.setLevel(Level.FINE);
         ConsoleHandler handler = new ConsoleHandler();
         handler.setLevel(Level.FINE);
         packageLogger.addHandler(handler);
